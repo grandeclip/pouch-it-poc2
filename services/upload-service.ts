@@ -2,6 +2,8 @@ import { API_CONFIG } from "@/constants/api-config";
 import RNBackgroundUpload from "react-native-background-upload";
 import { ScreenshotAsset } from "./media-service";
 
+const BATCH_SIZE = 20;
+
 export interface UploadOptions {
   url: string;
   path: string;
@@ -84,56 +86,74 @@ export function getUploadState(): UploadState {
 }
 
 /**
- * 단일 파일 업로드
+ * 배치 업로드 (JSON 바디로 20장씩)
  */
-async function uploadFile(
-  asset: ScreenshotAsset,
+async function uploadBatch(
+  batchIndex: number,
+  screenshots: ScreenshotAsset[],
+  totalBatches: number,
   onProgress: (progress: UploadProgress) => void
 ): Promise<boolean> {
-  const uploadId = `${asset.id}-${Date.now()}`;
+  const uploadId = `batch-${batchIndex}-${Date.now()}`;
+  const batchNumber = batchIndex + 1;
 
   try {
-    // 업로드 진행 상황 업데이트
-    onProgress({
-      uploadId,
-      filename: asset.filename,
-      progress: 0,
-      status: "uploading",
-    });
+    // 스크린샷 URI 배열 생성
+    const screenshotUris = screenshots.map((s) => s.uri);
 
-    const options: UploadOptions = {
+    // JSON 페이로드 생성
+    const payload = {
+      screenshots: screenshotUris,
+    };
+
+    console.log(
+      `📦 Batch ${batchNumber}/${totalBatches}: Uploading ${screenshots.length} screenshots`
+    );
+
+    // JSON 문자열로 변환
+    const jsonString = JSON.stringify(payload);
+    console.log(
+      `📤 Payload size: ${jsonString.length} bytes, Screenshots: ${screenshotUris.length}`
+    );
+
+    // 업로드 옵션
+    const options: any = {
       url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.SCREENSHOTS}`,
-      path: asset.uri,
+      path: `data:application/json;base64,${Buffer.from(jsonString).toString("base64")}`,
       method: "POST",
-      type: "multipart",
-      field: "file",
+      type: "raw",
       headers: {
+        "Content-Type": "application/json",
         "X-Guest-Id": API_CONFIG.GUEST_USER_ID,
       },
       notification: {
         enabled: true,
         autoClear: true,
-        title: "스크린샷 업로드 중",
-        description: asset.filename,
+        title: `스크린샷 업로드 중 [${batchNumber}/${totalBatches}]`,
+        description: `${screenshots.length}개 파일 처리 중...`,
       },
     };
 
     try {
-      // 업로드 시작하고 uploadId 받기
+      // 업로드 시작
       const generatedUploadId = await (RNBackgroundUpload.startUpload as any)(options);
 
       return new Promise((resolve) => {
+        let completed = false;
+
         // 진행률 업데이트
         const progressSubscription = (RNBackgroundUpload.addListener as any)(
           "progress",
           generatedUploadId,
           (data: { progress: number; id: string }) => {
-            onProgress({
-              uploadId: generatedUploadId,
-              filename: asset.filename,
-              progress: Math.round(data.progress),
-              status: "uploading",
-            });
+            if (!completed) {
+              onProgress({
+                uploadId: generatedUploadId,
+                filename: `Batch ${batchNumber}/${totalBatches} (${screenshots.length} files)`,
+                progress: Math.round(data.progress),
+                status: "uploading",
+              });
+            }
           }
         );
 
@@ -142,20 +162,25 @@ async function uploadFile(
           "completed",
           generatedUploadId,
           () => {
-            console.log(`✅ Upload completed: ${asset.filename}`);
-            onProgress({
-              uploadId: generatedUploadId,
-              filename: asset.filename,
-              progress: 100,
-              status: "completed",
-            });
+            if (!completed) {
+              completed = true;
+              console.log(
+                `✅ Batch ${batchNumber}/${totalBatches} completed: ${screenshots.length} files`
+              );
+              onProgress({
+                uploadId: generatedUploadId,
+                filename: `Batch ${batchNumber}/${totalBatches} (${screenshots.length} files)`,
+                progress: 100,
+                status: "completed",
+              });
 
-            // 리스너 제거
-            progressSubscription?.remove?.();
-            completedSubscription?.remove?.();
-            errorSubscription?.remove?.();
-            cancelledSubscription?.remove?.();
-            resolve(true);
+              // 리스너 제거
+              progressSubscription?.remove?.();
+              completedSubscription?.remove?.();
+              errorSubscription?.remove?.();
+              cancelledSubscription?.remove?.();
+              resolve(true);
+            }
           }
         );
 
@@ -164,21 +189,24 @@ async function uploadFile(
           "error",
           generatedUploadId,
           (data: { error: string; id: string }) => {
-            console.error(`❌ Upload error: ${asset.filename}`, data.error);
-            onProgress({
-              uploadId: generatedUploadId,
-              filename: asset.filename,
-              progress: 0,
-              status: "error",
-              error: data.error || "Unknown error",
-            });
+            if (!completed) {
+              completed = true;
+              console.error(`❌ Batch ${batchNumber}/${totalBatches} error:`, data.error);
+              onProgress({
+                uploadId: generatedUploadId,
+                filename: `Batch ${batchNumber}/${totalBatches} (${screenshots.length} files)`,
+                progress: 0,
+                status: "error",
+                error: data.error || "Unknown error",
+              });
 
-            // 리스너 제거
-            progressSubscription?.remove?.();
-            completedSubscription?.remove?.();
-            errorSubscription?.remove?.();
-            cancelledSubscription?.remove?.();
-            resolve(false);
+              // 리스너 제거
+              progressSubscription?.remove?.();
+              completedSubscription?.remove?.();
+              errorSubscription?.remove?.();
+              cancelledSubscription?.remove?.();
+              resolve(false);
+            }
           }
         );
 
@@ -187,26 +215,29 @@ async function uploadFile(
           "cancelled",
           generatedUploadId,
           () => {
-            console.warn(`⚠️ Upload cancelled: ${asset.filename}`);
+            if (!completed) {
+              completed = true;
+              console.warn(`⚠️ Batch ${batchNumber}/${totalBatches} cancelled`);
 
-            // 리스너 제거
-            progressSubscription?.remove?.();
-            completedSubscription?.remove?.();
-            errorSubscription?.remove?.();
-            cancelledSubscription?.remove?.();
-            resolve(false);
+              // 리스너 제거
+              progressSubscription?.remove?.();
+              completedSubscription?.remove?.();
+              errorSubscription?.remove?.();
+              cancelledSubscription?.remove?.();
+              resolve(false);
+            }
           }
         );
       });
     } catch (uploadError) {
-      console.error(`❌ Failed to start upload: ${asset.filename}`, uploadError);
+      console.error(`❌ Failed to start batch ${batchNumber}/${totalBatches}:`, uploadError);
       throw uploadError;
     }
   } catch (error) {
-    console.error(`❌ Upload failed: ${asset.filename}`, error);
+    console.error(`❌ Batch ${batchNumber}/${totalBatches} failed:`, error);
     onProgress({
       uploadId,
-      filename: asset.filename,
+      filename: `Batch ${batchNumber}/${totalBatches} (${screenshots.length} files)`,
       progress: 0,
       status: "error",
       error: error instanceof Error ? error.message : "Unknown error",
@@ -216,7 +247,7 @@ async function uploadFile(
 }
 
 /**
- * 여러 파일 배치 업로드
+ * 여러 파일 배치 업로드 (20장씩 분할)
  */
 export async function uploadScreenshots(
   screenshots: ScreenshotAsset[]
@@ -227,51 +258,63 @@ export async function uploadScreenshots(
   }
 
   try {
+    // 배치로 나누기
+    const batches: ScreenshotAsset[][] = [];
+    for (let i = 0; i < screenshots.length; i += BATCH_SIZE) {
+      batches.push(screenshots.slice(i, i + BATCH_SIZE));
+    }
+
+    const totalBatches = batches.length;
+
     updateUploadState({
       isUploading: true,
       totalFiles: screenshots.length,
       completedFiles: 0,
       failedFiles: 0,
-      uploads: screenshots.map((screenshot) => ({
-        uploadId: screenshot.id,
-        filename: screenshot.filename,
+      uploads: batches.map((batch, index) => ({
+        uploadId: `batch-${index}`,
+        filename: `Batch ${index + 1}/${totalBatches} (${batch.length} files)`,
         progress: 0,
         status: "pending" as const,
       })),
     });
 
-    console.log(`🚀 Starting upload of ${screenshots.length} screenshots`);
+    console.log(
+      `🚀 Starting upload of ${screenshots.length} screenshots in ${totalBatches} batches (${BATCH_SIZE} per batch)`
+    );
 
     let completedCount = 0;
     let failedCount = 0;
 
-    // 순차적으로 업로드 (동시성 제한)
-    const uploadPromises = screenshots.map((screenshot) =>
-      uploadFile(screenshot, (progress) => {
+    // 배치 순차 업로드
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      const success = await uploadBatch(i, batch, totalBatches, (progress) => {
         // 업로드 목록 업데이트
         updateUploadState((prevState: UploadState) => ({
           ...prevState,
           uploads: prevState.uploads.map((upload) =>
-            upload.uploadId === progress.uploadId ? progress : upload
+            upload.uploadId === `batch-${i}` ? { ...upload, ...progress } : upload
           ),
         }));
 
         // 완료/실패 카운트 업데이트
-        if (progress.status === "completed") {
-          completedCount++;
+        if (progress.status === "completed" && completedCount < i + 1) {
+          completedCount = i + 1;
           updateUploadState({ completedFiles: completedCount });
         } else if (progress.status === "error") {
           failedCount++;
           updateUploadState({ failedFiles: failedCount });
         }
-      }).then((success) => success)
-    );
+      });
 
-    // 모든 업로드 완료 대기
-    await Promise.all(uploadPromises);
+      if (!success) {
+        failedCount++;
+      }
+    }
 
     console.log(
-      `✨ Upload complete: ${completedCount} succeeded, ${failedCount} failed`
+      `✨ Upload complete: ${completedCount} batches succeeded, ${failedCount} batches failed`
     );
 
     updateUploadState({
