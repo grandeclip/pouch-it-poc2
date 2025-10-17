@@ -1,5 +1,6 @@
 import { API_CONFIG } from "@/constants/api-config";
 import RNBackgroundUpload from "react-native-background-upload";
+import FileSystem from "expo-file-system";
 import { ScreenshotAsset } from "./media-service";
 
 const BATCH_SIZE = 20;
@@ -116,10 +117,16 @@ async function uploadBatch(
       `📤 Payload size: ${jsonString.length} bytes, Screenshots: ${screenshotUris.length}`
     );
 
+    // 임시 JSON 파일로 저장
+    const fs = FileSystem as any;
+    const tempPath = `${fs.documentDirectory}batch-${batchIndex}-${Date.now()}.json`;
+    await fs.writeAsStringAsync(tempPath, jsonString);
+    console.log(`💾 Temp file saved: ${tempPath}`);
+
     // 업로드 옵션
     const options: any = {
       url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.SCREENSHOTS}`,
-      path: `data:application/json;base64,${Buffer.from(jsonString).toString("base64")}`,
+      path: tempPath,
       method: "POST",
       type: "raw",
       headers: {
@@ -179,6 +186,14 @@ async function uploadBatch(
               completedSubscription?.remove?.();
               errorSubscription?.remove?.();
               cancelledSubscription?.remove?.();
+
+              // 임시 파일 삭제
+              fs.deleteAsync(tempPath, { idempotent: true })
+                .then(() => console.log(`🗑️ Temp file deleted: ${tempPath}`))
+                .catch((err: any) =>
+                  console.warn(`Failed to delete temp file: ${tempPath}`, err)
+                );
+
               resolve(true);
             }
           }
@@ -205,6 +220,14 @@ async function uploadBatch(
               completedSubscription?.remove?.();
               errorSubscription?.remove?.();
               cancelledSubscription?.remove?.();
+
+              // 임시 파일 삭제
+              fs.deleteAsync(tempPath, { idempotent: true })
+                .then(() => console.log(`🗑️ Temp file deleted: ${tempPath}`))
+                .catch((err: any) =>
+                  console.warn(`Failed to delete temp file: ${tempPath}`, err)
+                );
+
               resolve(false);
             }
           }
@@ -224,6 +247,14 @@ async function uploadBatch(
               completedSubscription?.remove?.();
               errorSubscription?.remove?.();
               cancelledSubscription?.remove?.();
+
+              // 임시 파일 삭제
+              fs.deleteAsync(tempPath, { idempotent: true })
+                .then(() => console.log(`🗑️ Temp file deleted: ${tempPath}`))
+                .catch((err: any) =>
+                  console.warn(`Failed to delete temp file: ${tempPath}`, err)
+                );
+
               resolve(false);
             }
           }
