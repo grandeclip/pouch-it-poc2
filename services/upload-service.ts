@@ -1,6 +1,6 @@
 import { API_CONFIG } from "@/constants/api-config";
+import * as FileSystem from "expo-file-system/legacy";
 import RNBackgroundUpload from "react-native-background-upload";
-import * as FileSystem from "expo-file-system";
 import { ScreenshotAsset } from "./media-service";
 
 const BATCH_SIZE = 20;
@@ -118,7 +118,9 @@ async function uploadBatch(
     );
 
     // 임시 JSON 파일로 저장
-    const tempPath = `${(FileSystem as any).documentDirectory}batch-${batchIndex}-${Date.now()}.json`;
+    const tempPath = `${
+      (FileSystem as any).documentDirectory
+    }batch-${batchIndex}-${Date.now()}.json`;
     await (FileSystem as any).writeAsStringAsync(tempPath, jsonString);
     console.log(`💾 Temp file saved: ${tempPath}`);
 
@@ -142,7 +144,9 @@ async function uploadBatch(
 
     try {
       // 업로드 시작
-      const generatedUploadId = await (RNBackgroundUpload.startUpload as any)(options);
+      const generatedUploadId = await (RNBackgroundUpload.startUpload as any)(
+        options
+      );
 
       return new Promise((resolve) => {
         let completed = false;
@@ -187,7 +191,8 @@ async function uploadBatch(
               cancelledSubscription?.remove?.();
 
               // 임시 파일 삭제
-              (FileSystem as any).deleteAsync(tempPath, { idempotent: true })
+              (FileSystem as any)
+                .deleteAsync(tempPath, { idempotent: true })
                 .then(() => console.log(`🗑️ Temp file deleted: ${tempPath}`))
                 .catch((err: any) =>
                   console.warn(`Failed to delete temp file: ${tempPath}`, err)
@@ -205,7 +210,10 @@ async function uploadBatch(
           (data: { error: string; id: string }) => {
             if (!completed) {
               completed = true;
-              console.error(`❌ Batch ${batchNumber}/${totalBatches} error:`, data.error);
+              console.error(
+                `❌ Batch ${batchNumber}/${totalBatches} error:`,
+                data.error
+              );
               onProgress({
                 uploadId: generatedUploadId,
                 filename: `Batch ${batchNumber}/${totalBatches} (${screenshots.length} files)`,
@@ -221,7 +229,8 @@ async function uploadBatch(
               cancelledSubscription?.remove?.();
 
               // 임시 파일 삭제
-              (FileSystem as any).deleteAsync(tempPath, { idempotent: true })
+              (FileSystem as any)
+                .deleteAsync(tempPath, { idempotent: true })
                 .then(() => console.log(`🗑️ Temp file deleted: ${tempPath}`))
                 .catch((err: any) =>
                   console.warn(`Failed to delete temp file: ${tempPath}`, err)
@@ -248,7 +257,8 @@ async function uploadBatch(
               cancelledSubscription?.remove?.();
 
               // 임시 파일 삭제
-              (FileSystem as any).deleteAsync(tempPath, { idempotent: true })
+              (FileSystem as any)
+                .deleteAsync(tempPath, { idempotent: true })
                 .then(() => console.log(`🗑️ Temp file deleted: ${tempPath}`))
                 .catch((err: any) =>
                   console.warn(`Failed to delete temp file: ${tempPath}`, err)
@@ -260,7 +270,10 @@ async function uploadBatch(
         );
       });
     } catch (uploadError) {
-      console.error(`❌ Failed to start batch ${batchNumber}/${totalBatches}:`, uploadError);
+      console.error(
+        `❌ Failed to start batch ${batchNumber}/${totalBatches}:`,
+        uploadError
+      );
       throw uploadError;
     }
   } catch (error) {
@@ -319,32 +332,51 @@ export async function uploadScreenshots(
     // 배치 순차 업로드
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i];
+      let batchCompleted = false;
+      let batchFailed = false;
+
       const success = await uploadBatch(i, batch, totalBatches, (progress) => {
         // 업로드 목록 업데이트
         updateUploadState((prevState: UploadState) => ({
           ...prevState,
           uploads: prevState.uploads.map((upload) =>
-            upload.uploadId === `batch-${i}` ? { ...upload, ...progress } : upload
+            upload.uploadId === `batch-${i}`
+              ? { ...upload, ...progress }
+              : upload
           ),
         }));
 
-        // 완료/실패 카운트 업데이트
-        if (progress.status === "completed" && completedCount < i + 1) {
-          completedCount = i + 1;
+        // 완료/실패 카운트 업데이트 (파일 수 기준)
+        if (progress.status === "completed" && !batchCompleted) {
+          batchCompleted = true;
+          completedCount += batch.length;
           updateUploadState({ completedFiles: completedCount });
-        } else if (progress.status === "error") {
-          failedCount++;
+          console.log(
+            `📊 Batch ${i + 1} completed: +${batch.length} files | Total: ${completedCount}/${screenshots.length} (${Math.round((completedCount / screenshots.length) * 100)}%)`
+          );
+        } else if (progress.status === "error" && !batchFailed) {
+          batchFailed = true;
+          failedCount += batch.length;
           updateUploadState({ failedFiles: failedCount });
+          console.log(
+            `📊 Batch ${i + 1} failed: +${batch.length} files | Failed total: ${failedCount}/${screenshots.length}`
+          );
         }
       });
 
-      if (!success) {
-        failedCount++;
+      // 만약 success가 false이고 아직 batchFailed가 false라면 (예상치 못한 실패)
+      if (!success && !batchFailed) {
+        batchFailed = true;
+        failedCount += batch.length;
+        updateUploadState({ failedFiles: failedCount });
+        console.log(
+          `📊 Batch ${i + 1} unexpected failure: +${batch.length} files | Failed total: ${failedCount}/${screenshots.length}`
+        );
       }
     }
 
     console.log(
-      `✨ Upload complete: ${completedCount} batches succeeded, ${failedCount} batches failed`
+      `✨ Upload complete: ${completedCount}/${screenshots.length} files succeeded, ${failedCount}/${screenshots.length} files failed`
     );
 
     updateUploadState({
@@ -376,8 +408,12 @@ export async function cancelUpload(uploadId: string): Promise<void> {
 export async function cancelAllUploads(): Promise<void> {
   try {
     const cancelPromises = uploadState.uploads
-      .filter((upload) => upload.status === "uploading" || upload.status === "pending")
-      .map((upload) => (RNBackgroundUpload.cancelUpload as any)(upload.uploadId));
+      .filter(
+        (upload) => upload.status === "uploading" || upload.status === "pending"
+      )
+      .map((upload) =>
+        (RNBackgroundUpload.cancelUpload as any)(upload.uploadId)
+      );
 
     await Promise.all(cancelPromises);
     console.log("Cancelled all uploads");
