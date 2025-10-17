@@ -1,12 +1,12 @@
-import RNBackgroundUpload from 'react-native-background-upload';
-import { API_CONFIG } from '@/constants/api-config';
-import { ScreenshotAsset } from './media-service';
+import { API_CONFIG } from "@/constants/api-config";
+import RNBackgroundUpload from "react-native-background-upload";
+import { ScreenshotAsset } from "./media-service";
 
 export interface UploadOptions {
   url: string;
   path: string;
   method?: string;
-  type?: 'multipart' | 'raw';
+  type?: "multipart" | "raw";
   field?: string;
   headers?: Record<string, string>;
   notification?: {
@@ -21,7 +21,7 @@ export interface UploadProgress {
   uploadId: string;
   filename: string;
   progress: number;
-  status: 'pending' | 'uploading' | 'completed' | 'error';
+  status: "pending" | "uploading" | "completed" | "error";
   error?: string;
 }
 
@@ -49,7 +49,9 @@ const stateChangeCallbacks: UploadStateChangeCallback[] = [];
 /**
  * 업로드 상태 변경 리스너 등록
  */
-export function onUploadStateChange(callback: UploadStateChangeCallback): () => void {
+export function onUploadStateChange(
+  callback: UploadStateChangeCallback
+): () => void {
   stateChangeCallbacks.push(callback);
   // 구독 해제 함수 반환
   return () => {
@@ -64,9 +66,12 @@ export function onUploadStateChange(callback: UploadStateChangeCallback): () => 
  * 업로드 상태 업데이트 및 리스너 호출
  */
 function updateUploadState(
-  newState: Partial<UploadState> | ((state: UploadState) => Partial<UploadState>),
+  newState:
+    | Partial<UploadState>
+    | ((state: UploadState) => Partial<UploadState>)
 ) {
-  const updates = typeof newState === 'function' ? newState(uploadState) : newState;
+  const updates =
+    typeof newState === "function" ? newState(uploadState) : newState;
   uploadState = { ...uploadState, ...updates };
   stateChangeCallbacks.forEach((callback) => callback(uploadState));
 }
@@ -83,7 +88,7 @@ export function getUploadState(): UploadState {
  */
 async function uploadFile(
   asset: ScreenshotAsset,
-  onProgress: (progress: UploadProgress) => void,
+  onProgress: (progress: UploadProgress) => void
 ): Promise<boolean> {
   const uploadId = `${asset.id}-${Date.now()}`;
 
@@ -93,94 +98,118 @@ async function uploadFile(
       uploadId,
       filename: asset.filename,
       progress: 0,
-      status: 'uploading',
+      status: "uploading",
     });
 
     const options: UploadOptions = {
       url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.SCREENSHOTS}`,
       path: asset.uri,
-      method: 'POST',
-      type: 'multipart',
-      field: 'file',
+      method: "POST",
+      type: "multipart",
+      field: "file",
       headers: {
-        'X-User-ID': API_CONFIG.GUEST_USER_ID,
+        "X-Guest-Id": API_CONFIG.GUEST_USER_ID,
       },
       notification: {
         enabled: true,
         autoClear: true,
-        title: '스크린샷 업로드 중',
+        title: "스크린샷 업로드 중",
         description: asset.filename,
       },
     };
 
-    return new Promise((resolve) => {
-      const uploader = RNBackgroundUpload as any;
+    try {
+      // 업로드 시작하고 uploadId 받기
+      const generatedUploadId = await (RNBackgroundUpload.startUpload as any)(options);
 
-      // 진행률 업데이트
-      uploader.addListener(
-        'progress',
-        uploadId,
-        (data: { progress: number }) => {
-          onProgress({
-            uploadId,
-            filename: asset.filename,
-            progress: Math.round(data.progress),
-            status: 'uploading',
-          });
-        },
-      );
+      return new Promise((resolve) => {
+        // 진행률 업데이트
+        const progressSubscription = (RNBackgroundUpload.addListener as any)(
+          "progress",
+          generatedUploadId,
+          (data: { progress: number; id: string }) => {
+            onProgress({
+              uploadId: generatedUploadId,
+              filename: asset.filename,
+              progress: Math.round(data.progress),
+              status: "uploading",
+            });
+          }
+        );
 
-      // 완료
-      uploader.addListener('completed', uploadId, () => {
-        console.log(`✅ Upload completed: ${asset.filename}`);
-        onProgress({
-          uploadId,
-          filename: asset.filename,
-          progress: 100,
-          status: 'completed',
-        });
+        // 완료
+        const completedSubscription = (RNBackgroundUpload.addListener as any)(
+          "completed",
+          generatedUploadId,
+          () => {
+            console.log(`✅ Upload completed: ${asset.filename}`);
+            onProgress({
+              uploadId: generatedUploadId,
+              filename: asset.filename,
+              progress: 100,
+              status: "completed",
+            });
 
-        // 리스너 제거
-        uploader.remove(uploadId);
-        resolve(true);
+            // 리스너 제거
+            progressSubscription?.remove?.();
+            completedSubscription?.remove?.();
+            errorSubscription?.remove?.();
+            cancelledSubscription?.remove?.();
+            resolve(true);
+          }
+        );
+
+        // 에러
+        const errorSubscription = (RNBackgroundUpload.addListener as any)(
+          "error",
+          generatedUploadId,
+          (data: { error: string; id: string }) => {
+            console.error(`❌ Upload error: ${asset.filename}`, data.error);
+            onProgress({
+              uploadId: generatedUploadId,
+              filename: asset.filename,
+              progress: 0,
+              status: "error",
+              error: data.error || "Unknown error",
+            });
+
+            // 리스너 제거
+            progressSubscription?.remove?.();
+            completedSubscription?.remove?.();
+            errorSubscription?.remove?.();
+            cancelledSubscription?.remove?.();
+            resolve(false);
+          }
+        );
+
+        // 취소
+        const cancelledSubscription = (RNBackgroundUpload.addListener as any)(
+          "cancelled",
+          generatedUploadId,
+          () => {
+            console.warn(`⚠️ Upload cancelled: ${asset.filename}`);
+
+            // 리스너 제거
+            progressSubscription?.remove?.();
+            completedSubscription?.remove?.();
+            errorSubscription?.remove?.();
+            cancelledSubscription?.remove?.();
+            resolve(false);
+          }
+        );
       });
-
-      // 에러
-      uploader.addListener('error', uploadId, (data: { error: string }) => {
-        console.error(`❌ Upload error: ${asset.filename}`, data.error);
-        onProgress({
-          uploadId,
-          filename: asset.filename,
-          progress: 0,
-          status: 'error',
-          error: data.error || 'Unknown error',
-        });
-
-        // 리스너 제거
-        uploader.remove(uploadId);
-        resolve(false);
-      });
-
-      // 취소
-      uploader.addListener('cancelled', uploadId, () => {
-        console.warn(`⚠️ Upload cancelled: ${asset.filename}`);
-
-        // 리스너 제거
-        uploader.remove(uploadId);
-        resolve(false);
-      });
-
-      // 업로드 시작
-      uploader.start(options, uploadId);
-    });
+    } catch (uploadError) {
+      console.error(`❌ Failed to start upload: ${asset.filename}`, uploadError);
+      throw uploadError;
+    }
   } catch (error) {
     console.error(`❌ Upload failed: ${asset.filename}`, error);
     onProgress({
       uploadId,
       filename: asset.filename,
       progress: 0,
-      status: 'error',
-      error: error instanceof Error ? error.message : 'Unknown error',
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown error",
     });
     return false;
   }
@@ -189,9 +218,11 @@ async function uploadFile(
 /**
  * 여러 파일 배치 업로드
  */
-export async function uploadScreenshots(screenshots: ScreenshotAsset[]): Promise<void> {
+export async function uploadScreenshots(
+  screenshots: ScreenshotAsset[]
+): Promise<void> {
   if (screenshots.length === 0) {
-    console.warn('No screenshots to upload');
+    console.warn("No screenshots to upload");
     return;
   }
 
@@ -205,7 +236,7 @@ export async function uploadScreenshots(screenshots: ScreenshotAsset[]): Promise
         uploadId: screenshot.id,
         filename: screenshot.filename,
         progress: 0,
-        status: 'pending' as const,
+        status: "pending" as const,
       })),
     });
 
@@ -221,33 +252,33 @@ export async function uploadScreenshots(screenshots: ScreenshotAsset[]): Promise
         updateUploadState((prevState: UploadState) => ({
           ...prevState,
           uploads: prevState.uploads.map((upload) =>
-            upload.uploadId === progress.uploadId ? progress : upload,
+            upload.uploadId === progress.uploadId ? progress : upload
           ),
         }));
 
         // 완료/실패 카운트 업데이트
-        if (progress.status === 'completed') {
+        if (progress.status === "completed") {
           completedCount++;
           updateUploadState({ completedFiles: completedCount });
-        } else if (progress.status === 'error') {
+        } else if (progress.status === "error") {
           failedCount++;
           updateUploadState({ failedFiles: failedCount });
         }
-      }).then((success) => success),
+      }).then((success) => success)
     );
 
     // 모든 업로드 완료 대기
     await Promise.all(uploadPromises);
 
     console.log(
-      `✨ Upload complete: ${completedCount} succeeded, ${failedCount} failed`,
+      `✨ Upload complete: ${completedCount} succeeded, ${failedCount} failed`
     );
 
     updateUploadState({
       isUploading: false,
     });
   } catch (error) {
-    console.error('Batch upload error:', error);
+    console.error("Batch upload error:", error);
     updateUploadState({
       isUploading: false,
     });
@@ -257,29 +288,27 @@ export async function uploadScreenshots(screenshots: ScreenshotAsset[]): Promise
 /**
  * 특정 업로드 취소
  */
-export function cancelUpload(uploadId: string): void {
+export async function cancelUpload(uploadId: string): Promise<void> {
   try {
-    const uploader = RNBackgroundUpload as any;
-    uploader.cancel(uploadId);
+    await (RNBackgroundUpload.cancelUpload as any)(uploadId);
     console.log(`Cancelled upload: ${uploadId}`);
   } catch (error) {
-    console.error('Failed to cancel upload:', error);
+    console.error("Failed to cancel upload:", error);
   }
 }
 
 /**
  * 모든 업로드 취소
  */
-export function cancelAllUploads(): void {
+export async function cancelAllUploads(): Promise<void> {
   try {
-    const uploader = RNBackgroundUpload as any;
-    uploadState.uploads.forEach((upload) => {
-      if (upload.status === 'uploading' || upload.status === 'pending') {
-        uploader.cancel(upload.uploadId);
-      }
-    });
-    console.log('Cancelled all uploads');
+    const cancelPromises = uploadState.uploads
+      .filter((upload) => upload.status === "uploading" || upload.status === "pending")
+      .map((upload) => (RNBackgroundUpload.cancelUpload as any)(upload.uploadId));
+
+    await Promise.all(cancelPromises);
+    console.log("Cancelled all uploads");
   } catch (error) {
-    console.error('Failed to cancel all uploads:', error);
+    console.error("Failed to cancel all uploads:", error);
   }
 }
