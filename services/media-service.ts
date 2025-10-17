@@ -144,3 +144,4 @@ export async function getAssetInfo(assetId: string): Promise<ScreenshotAsset | n
     return null;
   }
 }
+
