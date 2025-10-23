@@ -1,0 +1,48 @@
+{
+  "name": "ios-background-uploader",
+  "version": "0.1.0",
+  "description": "iOS native background file uploader using URLSession",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "source": "src/index.ts",
+  "files": [
+    "lib",
+    "src",
+    "ios",
+    "android"
+  ],
+  "scripts": {
+    "build": "expo-module build",
+    "clean": "expo-module clean",
+    "lint": "expo-module lint",
+    "test": "expo-module test",
+    "open:ios": "open ios/IosBackgroundUploader.xcworkspace",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
+  },
+  "keywords": [
+    "ios",
+    "upload",
+    "background",
+    "urlsession",
+    "react-native"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "expo-module-scripts": "~3.5.0"
+  },
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  },
+  "expoPlatforms": [
+    "ios"
+  ],
+  "dependencies": {
+    "expo": "~54.0.13",
+    "react": "19.1.0",
+    "react-native": "0.81.4"
+  }
+}

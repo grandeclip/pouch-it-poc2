@@ -1,8 +1,21 @@
 import { API_CONFIG } from "@/constants/api-config";
-import RNBackgroundUpload from "react-native-background-upload";
+import { Platform } from "react-native";
 import * as MediaLibrary from "expo-media-library";
 import * as ImageManipulator from "expo-image-manipulator";
 import { ScreenshotAsset } from "./media-service";
+
+// iOS용 네이티브 업로더
+import * as IosBackgroundUploader from "../modules/ios-background-uploader";
+
+// Android용 기존 라이브러리
+import RNBackgroundUpload from "react-native-background-upload";
+
+// 플랫폼에 따라 업로더 선택
+const Uploader = Platform.select({
+  ios: IosBackgroundUploader,
+  android: RNBackgroundUpload,
+  default: RNBackgroundUpload,
+});
 
 export interface CompressedFile {
   id: string;
@@ -191,19 +204,38 @@ async function uploadFile(
     };
 
     try {
+      // iOS와 Android 플랫폼별 옵션 설정
+      const uploadOptions = Platform.select({
+        ios: {
+          url: options.url,
+          path: options.path,
+          field: options.field,
+          headers: options.headers,
+          notification: {
+            title: options.notification.title,
+            description: options.notification.description,
+          },
+        },
+        android: options, // Android는 기존 형식 유지
+        default: options,
+      });
+
       // 업로드 시작
-      const generatedUploadId = await (RNBackgroundUpload.startUpload as any)(
-        options
+      const generatedUploadId = await (Uploader as any)?.startUpload(
+        uploadOptions
       );
 
       return new Promise((resolve) => {
         let completed = false;
 
         // 진행률 업데이트
-        const progressSubscription = (RNBackgroundUpload.addListener as any)(
-          "progress",
-          generatedUploadId,
-          (data: { progress: number; id: string }) => {
+        const progressSubscription = (Uploader as any)?.addListener?.(
+          Platform.select({
+            ios: "onProgress",
+            android: "progress",
+            default: "progress",
+          }),
+          (data: any) => {
             if (!completed) {
               onProgress({
                 uploadId: generatedUploadId,
@@ -216,9 +248,12 @@ async function uploadFile(
         );
 
         // 완료
-        const completedSubscription = (RNBackgroundUpload.addListener as any)(
-          "completed",
-          generatedUploadId,
+        const completedSubscription = (Uploader as any)?.addListener?.(
+          Platform.select({
+            ios: "onCompleted",
+            android: "completed",
+            default: "completed",
+          }),
           () => {
             if (!completed) {
               completed = true;
@@ -249,22 +284,26 @@ async function uploadFile(
         );
 
         // 에러
-        const errorSubscription = (RNBackgroundUpload.addListener as any)(
-          "error",
-          generatedUploadId,
-          (data: { error: string; id: string }) => {
+        const errorSubscription = (Uploader as any)?.addListener?.(
+          Platform.select({
+            ios: "onError",
+            android: "error",
+            default: "error",
+          }),
+          (data: any) => {
             if (!completed) {
               completed = true;
+              const errorMessage = data.error || data.errorMessage || "Unknown error";
               console.error(
                 `❌ File ${fileNumber}/${totalFiles} error: ${screenshot.filename}`,
-                data.error
+                errorMessage
               );
               onProgress({
                 uploadId: generatedUploadId,
                 filename: screenshot.filename,
                 progress: 0,
                 status: "error",
-                error: data.error || "Unknown error",
+                error: errorMessage,
               });
 
               // 리스너 제거
@@ -279,9 +318,12 @@ async function uploadFile(
         );
 
         // 취소
-        const cancelledSubscription = (RNBackgroundUpload.addListener as any)(
-          "cancelled",
-          generatedUploadId,
+        const cancelledSubscription = (Uploader as any)?.addListener?.(
+          Platform.select({
+            ios: "onCancelled",
+            android: "cancelled",
+            default: "cancelled",
+          }),
           () => {
             if (!completed) {
               completed = true;
@@ -415,7 +457,7 @@ export async function uploadScreenshots(
  */
 export async function cancelUpload(uploadId: string): Promise<void> {
   try {
-    await (RNBackgroundUpload.cancelUpload as any)(uploadId);
+    await (Uploader as any)?.cancelUpload(uploadId);
     console.log(`Cancelled upload: ${uploadId}`);
   } catch (error) {
     console.error("Failed to cancel upload:", error);
@@ -432,7 +474,7 @@ export async function cancelAllUploads(): Promise<void> {
         (upload) => upload.status === "uploading" || upload.status === "pending"
       )
       .map((upload) =>
-        (RNBackgroundUpload.cancelUpload as any)(upload.uploadId)
+        (Uploader as any)?.cancelUpload(upload.uploadId)
       );
 
     await Promise.all(cancelPromises);
